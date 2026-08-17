@@ -1,0 +1,9 @@
+{
+  "uuid": "thermal-monitor@dominic.local",
+  "name": "Thermal Monitor",
+  "description": "Shows CPU temperature in the top bar and an optional desktop widget with live temperature charts. Reads hwmon sensors directly from sysfs, with optional NVIDIA GPU support.",
+  "shell-version": ["48", "49", "50"],
+  "settings-schema": "org.gnome.shell.extensions.thermal-monitor",
+  "gettext-domain": "thermal-monitor",
+  "version": 1
+}

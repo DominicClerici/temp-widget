@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <enum id="org.gnome.shell.extensions.thermal-monitor.unit">
+    <value nick="celsius" value="0"/>
+    <value nick="fahrenheit" value="1"/>
+  </enum>
+
+  <enum id="org.gnome.shell.extensions.thermal-monitor.anchor">
+    <value nick="top-left" value="0"/>
+    <value nick="top-right" value="1"/>
+    <value nick="bottom-left" value="2"/>
+    <value nick="bottom-right" value="3"/>
+  </enum>
+
+  <schema id="org.gnome.shell.extensions.thermal-monitor"
+          path="/org/gnome/shell/extensions/thermal-monitor/">
+
+    <!-- Polling -->
+    <key name="poll-interval" type="i">
+      <default>2000</default>
+      <range min="500" max="60000"/>
+      <summary>Sensor poll interval in milliseconds</summary>
+    </key>
+    <key name="gpu-poll-interval" type="i">
+      <default>6000</default>
+      <range min="1000" max="120000"/>
+      <summary>NVIDIA GPU poll interval in milliseconds</summary>
+    </key>
+    <key name="gpu-enabled" type="b">
+      <default>true</default>
+      <summary>Poll the NVIDIA GPU temperature via nvidia-smi</summary>
+    </key>
+
+    <!-- Presentation -->
+    <key name="unit" enum="org.gnome.shell.extensions.thermal-monitor.unit">
+      <default>'celsius'</default>
+      <summary>Temperature unit</summary>
+    </key>
+    <key name="decimals" type="i">
+      <default>0</default>
+      <range min="0" max="1"/>
+      <summary>Decimal places shown for temperature values</summary>
+    </key>
+    <key name="warn-temp" type="d">
+      <default>75.0</default>
+      <range min="0.0" max="150.0"/>
+      <summary>Warning threshold in degrees Celsius</summary>
+    </key>
+    <key name="crit-temp" type="d">
+      <default>90.0</default>
+      <range min="0.0" max="150.0"/>
+      <summary>Critical threshold in degrees Celsius</summary>
+    </key>
+    <key name="hidden-sensors" type="as">
+      <default>[]</default>
+      <summary>Sensor ids hidden everywhere (e.g. sensors reporting bogus values)</summary>
+    </key>
+
+    <!-- Panel indicator -->
+    <key name="panel-enabled" type="b">
+      <default>true</default>
+      <summary>Show the top bar indicator</summary>
+    </key>
+    <key name="panel-sensor" type="s">
+      <default>''</default>
+      <summary>Sensor id shown in the top bar; empty means auto-detect the CPU</summary>
+    </key>
+    <key name="panel-show-icon" type="b">
+      <default>true</default>
+      <summary>Show the thermometer icon in the top bar</summary>
+    </key>
+    <key name="panel-colorize" type="b">
+      <default>true</default>
+      <summary>Colour the top bar reading once it passes the warning threshold</summary>
+    </key>
+    <key name="panel-position" type="s">
+      <default>'right'</default>
+      <summary>Top bar box to place the indicator in (left, center or right)</summary>
+    </key>
+    <key name="panel-index" type="i">
+      <default>0</default>
+      <range min="0" max="20"/>
+      <summary>Position of the indicator within its top bar box</summary>
+    </key>
+    <key name="menu-sensors" type="as">
+      <default>[]</default>
+      <summary>Sensor ids listed in the popup menu; empty means all visible sensors</summary>
+    </key>
+
+    <!-- Desktop widget -->
+    <key name="widget-enabled" type="b">
+      <default>false</default>
+      <summary>Show the desktop widget</summary>
+    </key>
+    <key name="widget-sensors" type="as">
+      <default>[]</default>
+      <summary>Ordered sensor ids charted by the desktop widget</summary>
+    </key>
+    <key name="widget-history-seconds" type="i">
+      <default>60</default>
+      <range min="15" max="900"/>
+      <summary>Length of chart history in seconds</summary>
+    </key>
+    <key name="widget-width" type="i">
+      <default>320</default>
+      <range min="180" max="1200"/>
+      <summary>Widget width in logical pixels</summary>
+    </key>
+    <key name="widget-chart-height" type="i">
+      <default>52</default>
+      <range min="24" max="200"/>
+      <summary>Height of each chart in logical pixels</summary>
+    </key>
+    <key name="widget-opacity" type="i">
+      <default>85</default>
+      <range min="10" max="100"/>
+      <summary>Widget opacity as a percentage</summary>
+    </key>
+    <key name="widget-monitor" type="i">
+      <default>-1</default>
+      <range min="-1" max="16"/>
+      <summary>Monitor index for the widget; -1 means the primary monitor</summary>
+    </key>
+    <key name="widget-anchor" enum="org.gnome.shell.extensions.thermal-monitor.anchor">
+      <default>'top-right'</default>
+      <summary>Corner the widget offsets are measured from</summary>
+    </key>
+    <key name="widget-x" type="i">
+      <default>32</default>
+      <range min="0" max="10000"/>
+      <summary>Horizontal offset from the anchor corner</summary>
+    </key>
+    <key name="widget-y" type="i">
+      <default>64</default>
+      <range min="0" max="10000"/>
+      <summary>Vertical offset from the anchor corner</summary>
+    </key>
+    <key name="widget-show-title" type="b">
+      <default>true</default>
+      <summary>Show the widget header</summary>
+    </key>
+    <key name="widget-locked" type="b">
+      <default>false</default>
+      <summary>Prevent the widget from being dragged</summary>
+    </key>
+  </schema>
+</schemalist>

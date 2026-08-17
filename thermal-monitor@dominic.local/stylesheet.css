@@ -1,0 +1,114 @@
+/* Panel indicator */
+
+.thermal-panel-box {
+    spacing: 4px;
+}
+
+.thermal-panel-icon {
+    icon-size: 16px;
+}
+
+.thermal-panel-label {
+    font-feature-settings: "tnum";
+    font-weight: 500;
+}
+
+/* Threshold colouring, shared by the panel, the menu and the widget. */
+
+.thermal-level-normal {
+    color: inherit;
+}
+
+.thermal-level-warn {
+    color: #f5b942;
+}
+
+.thermal-level-crit {
+    color: #f26157;
+    font-weight: bold;
+}
+
+/* Popup menu */
+
+.thermal-menu-name {
+    padding-right: 24px;
+}
+
+.thermal-menu-value {
+    font-feature-settings: "tnum";
+    font-weight: 500;
+    text-align: right;
+    min-width: 60px;
+}
+
+.thermal-menu-empty {
+    color: rgba(255, 255, 255, 0.5);
+    font-style: italic;
+}
+
+/* Desktop widget */
+
+.thermal-widget {
+    background-color: rgba(20, 22, 26, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 14px;
+    padding: 12px 14px 14px 14px;
+    spacing: 8px;
+    color: #f2f3f5;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.thermal-widget:dragging {
+    border-color: rgba(255, 255, 255, 0.28);
+    background-color: rgba(20, 22, 26, 0.94);
+}
+
+.thermal-widget-header {
+    padding-bottom: 2px;
+}
+
+.thermal-widget-title {
+    font-weight: bold;
+    font-size: 0.95em;
+    letter-spacing: 0.4px;
+    color: rgba(255, 255, 255, 0.62);
+}
+
+.thermal-widget-content {
+    spacing: 10px;
+}
+
+.thermal-widget-row {
+    spacing: 3px;
+}
+
+.thermal-widget-row-header {
+    spacing: 7px;
+}
+
+.thermal-widget-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+}
+
+.thermal-widget-name {
+    font-size: 0.9em;
+    color: rgba(255, 255, 255, 0.78);
+}
+
+.thermal-widget-value {
+    font-feature-settings: "tnum";
+    font-size: 0.9em;
+    font-weight: bold;
+}
+
+.thermal-widget-empty {
+    color: rgba(255, 255, 255, 0.5);
+    font-style: italic;
+    padding: 6px 0;
+}
+
+.thermal-chart {
+    border-radius: 5px;
+}
