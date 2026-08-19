@@ -55,6 +55,10 @@
       <default>[]</default>
       <summary>Sensor ids hidden everywhere (e.g. sensors reporting bogus values)</summary>
     </key>
+    <key name="fan-show-idle" type="b">
+      <default>false</default>
+      <summary>List fan headers that have never reported a non-zero RPM</summary>
+    </key>
 
     <!-- Panel indicator -->
     <key name="panel-enabled" type="b">

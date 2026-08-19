@@ -13,7 +13,9 @@ import {
     readSensor,
     readCritical,
     readGpuAsync,
-    GPU_SENSOR_ID,
+    METRIC_RPM,
+    GPU_TEMP_SENSOR_ID,
+    GPU_FAN_SENSOR_ID,
 } from './sensors.js';
 
 /**
@@ -116,8 +118,13 @@ export const Monitor = GObject.registerClass({
         this._values = new Map();
         this._critical = new Map();
         this._history = new Map();
-        this._gpuValue = null;
+        /* Keyed by the GPU sensors' `key`, so one nvidia-smi call feeds both. */
+        this._gpuValues = new Map();
         this._gpuPending = false;
+        /* Fan channels seen turning at least once. A board exposes a header for
+         * every channel the super-I/O has, wired or not, so the unwired ones
+         * are only distinguishable by never having reported a speed. */
+        this._spun = new Set();
         this._tickId = 0;
         this._gpuTickId = 0;
         this._running = false;
@@ -127,6 +134,7 @@ export const Monitor = GObject.registerClass({
             this._settings.connect('changed::gpu-poll-interval', () => this._restartTimers()),
             this._settings.connect('changed::gpu-enabled', () => this.refresh()),
             this._settings.connect('changed::widget-history-seconds', () => this._resizeHistory()),
+            this._settings.connect('changed::fan-show-idle', () => this.emit('sensors-changed')),
         ];
     }
 
@@ -135,13 +143,27 @@ export const Monitor = GObject.registerClass({
     }
 
     /**
-     * Sensors minus the ones the user has hidden.
+     * Sensors minus the ones the user has hidden, and minus fan headers that
+     * have never reported a speed.
      *
      * @returns {Array<object>} visible sensor descriptors
      */
     get visibleSensors() {
         const hidden = new Set(this._settings.get_strv('hidden-sensors'));
-        return this._sensors.filter(s => !hidden.has(s.id));
+        const showIdle = this._settings.get_boolean('fan-show-idle');
+        return this._sensors.filter(s => {
+            if (hidden.has(s.id))
+                return false;
+            if (!showIdle && this._isIdleFan(s))
+                return false;
+            return true;
+        });
+    }
+
+    /* Only tachometers can be idle in this sense: the GPU reports a duty
+     * percentage, which is a real reading even at zero. */
+    _isIdleFan(sensor) {
+        return sensor.metric === METRIC_RPM && !this._spun.has(sensor.id);
     }
 
     sensorById(id) {
@@ -209,6 +231,7 @@ export const Monitor = GObject.registerClass({
         this._history.clear();
         this._values.clear();
         this._byId.clear();
+        this._spun.clear();
         this._sensors = [];
     }
 
@@ -240,6 +263,7 @@ export const Monitor = GObject.registerClass({
                 this._history.delete(id);
                 this._values.delete(id);
                 this._critical.delete(id);
+                this._spun.delete(id);
             }
         }
 
@@ -285,7 +309,7 @@ export const Monitor = GObject.registerClass({
             return GLib.SOURCE_CONTINUE;
         });
 
-        if (this._settings.get_boolean('gpu-enabled') && this._byId.has(GPU_SENSOR_ID)) {
+        if (this._settings.get_boolean('gpu-enabled') && this._byId.has(GPU_TEMP_SENSOR_ID)) {
             const gpuInterval = Math.max(
                 interval, this._settings.get_int('gpu-poll-interval'));
             this._pollGpu();
@@ -297,11 +321,13 @@ export const Monitor = GObject.registerClass({
     }
 
     _tick() {
+        let spunUp = false;
+
         for (const sensor of this._sensors) {
             /* The GPU is polled on its own slower timer; carry the last known
              * reading forward so every series shares one time axis. */
             const value = sensor.kind === 'gpu'
-                ? this._gpuValue
+                ? this._gpuValues.get(sensor.key) ?? null
                 : readSensor(sensor);
 
             if (value === null)
@@ -309,8 +335,18 @@ export const Monitor = GObject.registerClass({
             else
                 this._values.set(sensor.id, value);
 
+            /* A header that starts turning is real hardware, so reveal it
+             * rather than waiting for the next discovery pass. */
+            if (value > 0 && this._isIdleFan(sensor)) {
+                this._spun.add(sensor.id);
+                spunUp = true;
+            }
+
             this._history.get(sensor.id)?.push(value === null ? NaN : value);
         }
+
+        if (spunUp)
+            this.emit('sensors-changed');
         this.emit('updated');
     }
 
@@ -319,13 +355,16 @@ export const Monitor = GObject.registerClass({
             return;
         this._gpuPending = true;
 
-        readGpuAsync().then(value => {
+        readGpuAsync().then(({temperature, fan}) => {
             this._gpuPending = false;
             if (!this._running)
                 return;
-            this._gpuValue = value;
-            if (value !== null)
-                this._values.set(GPU_SENSOR_ID, value);
+            this._gpuValues.set('temp', temperature);
+            this._gpuValues.set('fan', fan);
+            if (temperature !== null)
+                this._values.set(GPU_TEMP_SENSOR_ID, temperature);
+            if (fan !== null)
+                this._values.set(GPU_FAN_SENSOR_ID, fan);
         }).catch(() => {
             this._gpuPending = false;
         });

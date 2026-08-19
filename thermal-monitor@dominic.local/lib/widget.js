@@ -1,5 +1,5 @@
-/* Desktop widget: a panel of live temperature charts pinned to the wallpaper
- * layer, so it sits behind ordinary windows the way a desktop widget should.
+/* Desktop widget: a panel of live sensor charts pinned to the wallpaper layer,
+ * so it sits behind ordinary windows the way a desktop widget should.
  *
  * Mutter does not implement wlr-layer-shell, so a separate GTK process cannot
  * claim a background layer on Wayland. Parenting into the shell's own
@@ -13,8 +13,8 @@ import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {Chart} from './chart.js';
-import {displayName} from './sensors.js';
-import {formatTemp, levelFor, seriesColor, cssColor} from './format.js';
+import {displayName, FAMILY_TEMPERATURE} from './sensors.js';
+import {formatReading, levelFor, seriesColor, cssColor} from './format.js';
 
 const EDGE_MARGIN = 8;
 
@@ -64,7 +64,7 @@ class ChartRow extends St.BoxLayout {
         header.add_child(this._name);
         header.add_child(this._value);
 
-        this._chart = new Chart({color, height: chartHeight});
+        this._chart = new Chart({color, metric: sensor.metric, height: chartHeight});
 
         this.add_child(header);
         this.add_child(this._chart);
@@ -82,9 +82,9 @@ class ChartRow extends St.BoxLayout {
         this._chart.height = height;
     }
 
-    update(celsius, options, warn, crit) {
-        this._value.text = formatTemp(celsius, options);
-        const level = levelFor(celsius, warn, crit);
+    update(value, options, warn, crit) {
+        this._value.text = formatReading(value, this.sensor.metric, options);
+        const level = levelFor(value, this.sensor.family, warn, crit);
         for (const cls of Object.values(LEVEL_STYLE_CLASSES))
             this._value.remove_style_class_name(cls);
         this._value.add_style_class_name(LEVEL_STYLE_CLASSES[level]);
@@ -179,7 +179,7 @@ class DesktopWidget extends St.BoxLayout {
             x_expand: true,
         });
         this._title = new St.Label({
-            text: 'Temperatures',
+            text: 'Sensors',
             style_class: 'thermal-widget-title',
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
@@ -397,7 +397,12 @@ class DesktopWidget extends St.BoxLayout {
 
         for (const row of this._rows) {
             const id = row.sensor.id;
-            row.setThresholds(warn, this._monitor.critical(id) ?? crit);
+            /* Threshold guides are a temperature idea; a fan chart has no
+             * line to draw. */
+            if (row.sensor.family === FAMILY_TEMPERATURE)
+                row.setThresholds(warn, this._monitor.critical(id) ?? crit);
+            else
+                row.setThresholds(null, null);
             row.update(this._monitor.value(id), options, warn, crit);
         }
     }

@@ -13,9 +13,10 @@ import {
     readGpuAsync,
     qualifiedName,
     defaultCpuSensorId,
-    GPU_SENSOR_ID,
+    METRIC_RPM,
+    GPU_TEMP_SENSOR_ID,
 } from './lib/sensors.js';
-import {formatTemp} from './lib/format.js';
+import {formatReading} from './lib/format.js';
 
 const LIVE_REFRESH_MS = 1500;
 
@@ -110,7 +111,12 @@ export default class ThermalMonitorPreferences extends ExtensionPreferences {
         this._settings = settings;
         this._sensors = discoverAll(settings.get_boolean('gpu-enabled'));
         this._liveRows = new Map();
-        this._gpuValue = null;
+        this._gpuValues = new Map();
+        /* The shell tracks this live; prefs only needs the state at the moment
+         * the window opens, since the pickers are built once. */
+        this._spun = new Set(this._sensors
+            .filter(s => s.metric === METRIC_RPM && (readSensor(s) ?? 0) > 0)
+            .map(s => s.id));
 
         window.add(this._generalPage());
         window.add(this._panelPage());
@@ -141,7 +147,14 @@ export default class ThermalMonitorPreferences extends ExtensionPreferences {
 
     _visibleSensors() {
         const hidden = new Set(this._settings.get_strv('hidden-sensors'));
-        return this._sensors.filter(s => !hidden.has(s.id));
+        const showIdle = this._settings.get_boolean('fan-show-idle');
+        return this._sensors.filter(s => {
+            if (hidden.has(s.id))
+                return false;
+            if (!showIdle && s.metric === METRIC_RPM && !this._spun.has(s.id))
+                return false;
+            return true;
+        });
     }
 
     /* ---------------------------------------------------------------- */
@@ -175,7 +188,7 @@ export default class ThermalMonitorPreferences extends ExtensionPreferences {
 
         const thresholds = new Adw.PreferencesGroup({
             title: 'Thresholds',
-            description: 'Always in Celsius, regardless of the display unit. Readings at or above a threshold are coloured, and the levels are drawn as guides on the charts.',
+            description: 'Always in Celsius, regardless of the display unit. Temperatures at or above a threshold are coloured, and the levels are drawn as guides on the charts. Fan speeds have no thresholds.',
         });
         thresholds.add(spinRow(this._settings, 'warn-temp',
             'Warning', null, {lower: 0, upper: 150, step: 1, digits: 0}));
@@ -233,7 +246,7 @@ export default class ThermalMonitorPreferences extends ExtensionPreferences {
 
         const menuGroup = new Adw.PreferencesGroup({
             title: 'Popup Menu',
-            description: 'Sensors listed when the indicator is clicked. With nothing selected, every visible sensor is shown.',
+            description: 'Sensors listed when the indicator is clicked. With nothing selected, every visible sensor is shown. Clicking a sensor in that list makes it the displayed one.',
         });
         this._addSelectionRows(menuGroup, 'menu-sensors');
         page.add(menuGroup);
@@ -431,6 +444,15 @@ export default class ThermalMonitorPreferences extends ExtensionPreferences {
             icon_name: 'temperature-symbolic',
         });
 
+        const fans = new Adw.PreferencesGroup({
+            title: 'Fans',
+            description: 'A super-I/O chip exposes a header for every channel it has, wired or not. Unwired ones sit at 0 RPM forever, so they are left out of the lists below until they report a speed.',
+        });
+        fans.add(switchRow(this._settings, 'fan-show-idle',
+            'Show idle fan headers',
+            'List fan channels that have never reported a non-zero RPM'));
+        page.add(fans);
+
         const group = new Adw.PreferencesGroup({
             title: 'Detected Sensors',
             description: 'Live readings. Hide sensors you never want to see — useful for inputs that report obviously bogus values.',
@@ -446,7 +468,7 @@ export default class ThermalMonitorPreferences extends ExtensionPreferences {
                 label: '--',
                 valign: Gtk.Align.CENTER,
                 css_classes: ['dim-label', 'numeric'],
-                width_chars: 8,
+                width_chars: 10,
                 xalign: 1,
             });
             const hide = new Gtk.ToggleButton({
@@ -487,17 +509,18 @@ export default class ThermalMonitorPreferences extends ExtensionPreferences {
             const label = this._liveRows.get(sensor.id);
             if (!label)
                 continue;
-            const celsius = sensor.kind === 'gpu'
-                ? this._gpuValue
+            const value = sensor.kind === 'gpu'
+                ? this._gpuValues.get(sensor.key) ?? null
                 : readSensor(sensor);
-            label.label = formatTemp(celsius, options);
+            label.label = formatReading(value, sensor.metric, options);
         }
 
-        if (this._liveRows.has(GPU_SENSOR_ID) && !this._gpuPending) {
+        if (this._liveRows.has(GPU_TEMP_SENSOR_ID) && !this._gpuPending) {
             this._gpuPending = true;
-            readGpuAsync().then(value => {
+            readGpuAsync().then(({temperature, fan}) => {
                 this._gpuPending = false;
-                this._gpuValue = value;
+                this._gpuValues.set('temp', temperature);
+                this._gpuValues.set('fan', fan);
             }).catch(() => {
                 this._gpuPending = false;
             });

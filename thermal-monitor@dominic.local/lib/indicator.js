@@ -9,8 +9,8 @@ import St from 'gi://St';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-import {displayName, defaultCpuSensorId} from './sensors.js';
-import {formatTemp, levelFor, LEVEL_NORMAL} from './format.js';
+import {displayName, defaultCpuSensorId, FAMILY_FAN} from './sensors.js';
+import {formatReading, levelFor, LEVEL_NORMAL} from './format.js';
 
 const LEVEL_STYLE_CLASSES = {
     normal: 'thermal-level-normal',
@@ -18,15 +18,17 @@ const LEVEL_STYLE_CLASSES = {
     crit: 'thermal-level-crit',
 };
 
-/* A non-activating menu row: sensor name on the left, reading on the right. */
-const SensorRow = GObject.registerClass(
-class SensorRow extends PopupMenu.PopupBaseMenuItem {
-    constructor(sensor) {
-        super({activate: false, hover: false, can_focus: false});
+/* A menu row that picks the sensor for the top bar: name on the left, live
+ * reading on the right, and a radio mark on whichever one is being shown. */
+const SensorRow = GObject.registerClass({
+    Signals: {'selected': {}},
+}, class SensorRow extends PopupMenu.PopupBaseMenuItem {
+    constructor(sensor, text) {
+        super({activate: true, hover: true, can_focus: true});
         this.sensor = sensor;
 
         this._name = new St.Label({
-            text: displayName(sensor),
+            text,
             style_class: 'thermal-menu-name',
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
@@ -39,14 +41,27 @@ class SensorRow extends PopupMenu.PopupBaseMenuItem {
 
         this.add_child(this._name);
         this.add_child(this._value);
+        this.setOrnament(PopupMenu.Ornament.NO_DOT);
     }
 
-    update(celsius, options, warn, crit) {
-        this._value.text = formatTemp(celsius, options);
-        const level = levelFor(celsius, warn, crit);
+    /* Emitting our own signal rather than chaining up keeps the popup open on
+     * click, so the mark visibly moves to the row that was just picked. */
+    activate(_event) {
+        this.emit('selected');
+    }
+
+    setSelected(selected) {
+        this.setOrnament(
+            selected ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NO_DOT);
+    }
+
+    update(value, options, warn, crit) {
+        this._value.text = formatReading(value, this.sensor.metric, options);
+        const level = levelFor(value, this.sensor.family, warn, crit);
         for (const cls of Object.values(LEVEL_STYLE_CLASSES))
             this._value.remove_style_class_name(cls);
         this._value.add_style_class_name(LEVEL_STYLE_CLASSES[level]);
+        this.accessible_name = `${this._name.text} ${this._value.text}`;
     }
 });
 
@@ -152,39 +167,62 @@ class ThermalIndicator extends PanelMenu.Button {
             return;
         }
 
-        /* Group by chip instance, so the two NVMe drives get one heading each. */
+        /* Group by chip instance, so the two NVMe drives get one heading each,
+         * and split a chip's fans off from its temperatures: the board reports
+         * both, and they read as two different lists. */
         const groups = new Map();
         for (const sensor of sensors) {
-            const key = `${sensor.chipLabel}|${sensor.hint ?? ''}`;
+            const key = `${sensor.family}|${sensor.chipLabel}|${sensor.hint ?? ''}`;
             if (!groups.has(key))
                 groups.set(key, []);
             groups.get(key).push(sensor);
         }
 
         for (const members of groups.values()) {
-            const [first] = members;
-            /* A lone sensor already named after its chip ("Wi-Fi") would sit
-             * under an identical heading, so skip the heading in that case. */
-            const redundant = members.length === 1 &&
-                !first.hint &&
-                displayName(first) === first.chipLabel;
+            const heading = this._headingFor(members);
+            /* A lone sensor already named after its heading ("Wi-Fi", "GPU
+             * Fan") would sit under an identical one, so drop the heading and
+             * let the row carry the full name instead. */
+            const showHeading = !(members.length === 1 &&
+                !members[0].hint &&
+                displayName(members[0]) === heading);
 
-            if (!redundant) {
-                const heading = first.hint
-                    ? `${first.chipLabel} — ${first.hint}`
-                    : first.chipLabel;
+            if (showHeading) {
                 this._section.addMenuItem(
                     new PopupMenu.PopupSeparatorMenuItem(heading));
             }
 
             for (const sensor of members) {
-                const row = new SensorRow(sensor);
+                const row = new SensorRow(
+                    sensor, showHeading ? sensor.label : displayName(sensor));
+                row.connect('selected',
+                    () => this._settings.set_string('panel-sensor', sensor.id));
                 this._rows.push(row);
                 this._section.addMenuItem(row);
             }
         }
 
         this._sync();
+    }
+
+    _headingFor(members) {
+        const [first] = members;
+        const base = first.hint
+            ? `${first.chipLabel} — ${first.hint}`
+            : first.chipLabel;
+        if (first.family !== FAMILY_FAN)
+            return base;
+        return `${base} ${members.length > 1 ? 'Fans' : 'Fan'}`;
+    }
+
+    /* The sensor the top bar is actually showing, which is the configured one
+     * unless it has gone away or been hidden. */
+    _activeSensorId() {
+        const visible = this._monitor.visibleSensors;
+        const configured = this._settings.get_string('panel-sensor');
+        if (configured && visible.some(s => s.id === configured))
+            return configured;
+        return defaultCpuSensorId(visible) ?? '';
     }
 
     _formatOptions() {
@@ -201,31 +239,25 @@ class ThermalIndicator extends PanelMenu.Button {
 
         this._icon.visible = this._settings.get_boolean('panel-show-icon');
 
-        /* Fall back when the chosen sensor is gone *or* has been hidden, so
-         * "hidden everywhere" also covers the panel. */
-        const visible = this._monitor.visibleSensors;
-        let sensorId = this._settings.get_string('panel-sensor');
-        if (!sensorId || !visible.some(s => s.id === sensorId))
-            sensorId = defaultCpuSensorId(visible) ?? '';
-
-        const celsius = sensorId ? this._monitor.value(sensorId) : null;
-        this._label.text = formatTemp(celsius, options);
+        const sensorId = this._activeSensorId();
+        const sensor = this._monitor.sensorById(sensorId);
+        const value = sensorId ? this._monitor.value(sensorId) : null;
+        this._label.text = formatReading(value, sensor?.metric, options);
 
         const level = this._settings.get_boolean('panel-colorize')
-            ? levelFor(celsius, warn, crit)
+            ? levelFor(value, sensor?.family, warn, crit)
             : LEVEL_NORMAL;
         for (const cls of Object.values(LEVEL_STYLE_CLASSES))
             this._label.remove_style_class_name(cls);
         this._label.add_style_class_name(LEVEL_STYLE_CLASSES[level]);
 
-        const sensor = this._monitor.sensorById(sensorId);
         this._label.accessible_name = sensor
             ? `${displayName(sensor)} ${this._label.text}`
-            : 'Temperature unavailable';
+            : 'Reading unavailable';
 
-        if (this.menu.isOpen || this._rows.length) {
-            for (const row of this._rows)
-                row.update(this._monitor.value(row.sensor.id), options, warn, crit);
+        for (const row of this._rows) {
+            row.update(this._monitor.value(row.sensor.id), options, warn, crit);
+            row.setSelected(row.sensor.id === sensorId);
         }
     }
 

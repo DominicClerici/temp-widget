@@ -11,10 +11,40 @@ const HWMON_ROOT = '/sys/class/hwmon';
 
 const PCI_RE = /^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-9a-f]$/;
 const I2C_RE = /^\d+-[0-9a-f]{4}$/;
-const TEMP_INPUT_RE = /^(temp\d+)_input$/;
 
-export const GPU_SENSOR_ID = 'nvidia/gpu0/temp';
+/* What a sensor measures. Drives grouping, thresholds and headings. */
+export const FAMILY_TEMPERATURE = 'temperature';
+export const FAMILY_FAN = 'fan';
+
+/* What unit the stored value is in. Drives formatting and chart axes. Kept
+ * separate from the family because the NVIDIA fan reports a percentage rather
+ * than a tachometer reading. */
+export const METRIC_TEMPERATURE = 'temperature';
+export const METRIC_RPM = 'rpm';
+export const METRIC_PERCENT = 'percent';
+
+export const GPU_TEMP_SENSOR_ID = 'nvidia/gpu0/temp';
+export const GPU_FAN_SENSOR_ID = 'nvidia/gpu0/fan';
 export const GPU_CHIP = 'nvidia';
+
+/* The hwmon input classes we scan for. Temperatures are reported in
+ * millidegrees, tachometers in whole RPM. */
+const CHANNELS = [
+    {
+        re: /^(temp\d+)_input$/,
+        family: FAMILY_TEMPERATURE,
+        metric: METRIC_TEMPERATURE,
+        scale: 1000,
+        hasCritical: true,
+    },
+    {
+        re: /^(fan\d+)_input$/,
+        family: FAMILY_FAN,
+        metric: METRIC_RPM,
+        scale: 1,
+        hasCritical: false,
+    },
+];
 
 /* Chip names read as driver jargon. Matched in order against the chip name,
  * either exactly or as a prefix; anything unmatched falls back to a tidied-up
@@ -157,8 +187,17 @@ function resolveDevicePath(hwmonName) {
     return devicePath.length > 1 ? devicePath : null;
 }
 
+/* Name for an input the driver did not label. Temperatures can borrow the chip
+ * name when they are the only one; a tachometer never can, since "Board" would
+ * say nothing about which header it is. */
+function fallbackLabel(channel, chip, index, total) {
+    if (channel.family === FAMILY_FAN)
+        return total === 1 ? 'Fan' : `Fan ${index + 1}`;
+    return total === 1 ? chipLabel(chip) : `Sensor ${index + 1}`;
+}
+
 /**
- * Scan /sys/class/hwmon for every temperature input.
+ * Scan /sys/class/hwmon for every temperature and fan input.
  *
  * @returns {Array<object>} descriptors sorted for stable presentation
  */
@@ -177,35 +216,36 @@ export function discoverHwmonSensors() {
         const devicePath = resolveDevicePath(entry);
         const bus = busTag(devicePath);
         const hint = deviceHint(chip, devicePath);
+        const files = listDir(hwmonPath);
 
-        const keys = listDir(hwmonPath)
-            .map(file => TEMP_INPUT_RE.exec(file))
-            .filter(m => m !== null)
-            .map(m => m[1])
-            .sort((a, b) => numericSuffix(a) - numericSuffix(b));
+        for (const channel of CHANNELS) {
+            const keys = files
+                .map(file => channel.re.exec(file))
+                .filter(m => m !== null)
+                .map(m => m[1])
+                .sort((a, b) => numericSuffix(a) - numericSuffix(b));
 
-        for (const key of keys) {
-            const rawLabel = readText(`${hwmonPath}/${key}_label`);
-            /* Unlabelled inputs would otherwise surface as "Memory temp1".
-             * With a single input the chip name alone says everything; with
-             * several, number them from one. */
-            const label = rawLabel
-                ? tidyLabel(rawLabel)
-                : (keys.length === 1
-                    ? chipLabel(chip)
-                    : `Sensor ${keys.indexOf(key) + 1}`);
+            keys.forEach((key, index) => {
+                const rawLabel = readText(`${hwmonPath}/${key}_label`);
+                const label = rawLabel
+                    ? tidyLabel(rawLabel)
+                    : fallbackLabel(channel, chip, index, keys.length);
 
-            sensors.push({
-                id: `${chip}/${bus}/${key}`,
-                chip,
-                chipLabel: chipLabel(chip),
-                bus,
-                key,
-                label,
-                hint,
-                path: `${hwmonPath}/${key}_input`,
-                critPath: `${hwmonPath}/${key}_crit`,
-                kind: 'hwmon',
+                sensors.push({
+                    id: `${chip}/${bus}/${key}`,
+                    chip,
+                    chipLabel: chipLabel(chip),
+                    bus,
+                    key,
+                    label,
+                    hint,
+                    family: channel.family,
+                    metric: channel.metric,
+                    scale: channel.scale,
+                    path: `${hwmonPath}/${key}_input`,
+                    critPath: channel.hasCritical ? `${hwmonPath}/${key}_crit` : null,
+                    kind: 'hwmon',
+                });
             });
         }
     }
@@ -217,6 +257,10 @@ export function discoverHwmonSensors() {
         const byChip = a.chip.localeCompare(b.chip) || a.bus.localeCompare(b.bus);
         if (byChip !== 0)
             return byChip;
+        /* Temperatures before fans, so each chip's block reads the same way. */
+        const byFamily = familyRank(a.family) - familyRank(b.family);
+        if (byFamily !== 0)
+            return byFamily;
         return numericSuffix(a.key) - numericSuffix(b.key);
     });
 
@@ -236,32 +280,55 @@ function chipRank(chip) {
     return 4;
 }
 
+function familyRank(family) {
+    return family === FAMILY_FAN ? 1 : 0;
+}
+
 function numericSuffix(key) {
     const m = /(\d+)$/.exec(key);
     return m ? parseInt(m[1], 10) : 0;
 }
 
 /**
- * Descriptor for the NVIDIA GPU, if nvidia-smi is on PATH.
+ * Descriptors for the NVIDIA GPU, if nvidia-smi is on PATH.
  *
- * @returns {object|null} sensor descriptor
+ * @returns {Array<object>} sensor descriptors, empty when there is no GPU
  */
-export function discoverGpuSensor() {
+export function discoverGpuSensors() {
     if (!GLib.find_program_in_path('nvidia-smi'))
-        return null;
+        return [];
 
-    return {
-        id: GPU_SENSOR_ID,
+    const common = {
         chip: GPU_CHIP,
         chipLabel: 'GPU',
         bus: 'gpu0',
-        key: 'temp',
-        label: 'Core',
         hint: null,
+        scale: 1,
         path: null,
         critPath: null,
         kind: 'gpu',
     };
+
+    return [
+        {
+            ...common,
+            id: GPU_TEMP_SENSOR_ID,
+            key: 'temp',
+            label: 'Core',
+            family: FAMILY_TEMPERATURE,
+            metric: METRIC_TEMPERATURE,
+        },
+        /* NVML reports the fan as a duty percentage; the card exposes no
+         * tachometer, so there is no RPM to be had here. */
+        {
+            ...common,
+            id: GPU_FAN_SENSOR_ID,
+            key: 'fan',
+            label: 'Fan',
+            family: FAMILY_FAN,
+            metric: METRIC_PERCENT,
+        },
+    ];
 }
 
 /**
@@ -273,24 +340,24 @@ export function discoverGpuSensor() {
 export function discoverAll(includeGpu = true) {
     const sensors = discoverHwmonSensors();
     if (includeGpu) {
-        const gpu = discoverGpuSensor();
-        if (gpu) {
+        const gpu = discoverGpuSensors();
+        if (gpu.length) {
             /* Slot the GPU in right after the CPU sensors. */
             const idx = sensors.findIndex(s => chipRank(s.chip) > 1);
             if (idx === -1)
-                sensors.push(gpu);
+                sensors.push(...gpu);
             else
-                sensors.splice(idx, 0, gpu);
+                sensors.splice(idx, 0, ...gpu);
         }
     }
     return sensors;
 }
 
 /**
- * Read one hwmon sensor.
+ * Read one hwmon sensor, in the unit named by its metric.
  *
  * @param {object} sensor descriptor from discovery
- * @returns {number|null} degrees Celsius, or null if unreadable
+ * @returns {number|null} reading, or null if unreadable
  */
 export function readSensor(sensor) {
     if (!sensor?.path)
@@ -298,10 +365,13 @@ export function readSensor(sensor) {
     const raw = readText(sensor.path);
     if (raw === null)
         return null;
-    const milli = Number(raw);
-    if (!Number.isFinite(milli))
+    const value = Number(raw);
+    if (!Number.isFinite(value))
         return null;
-    return milli / 1000;
+    /* Tachometers report -1 when the driver cannot measure the header. */
+    if (sensor.family === FAMILY_FAN && value < 0)
+        return null;
+    return value / (sensor.scale ?? 1);
 }
 
 /**
@@ -328,19 +398,24 @@ export function readCritical(sensor) {
 }
 
 /**
- * Query the NVIDIA GPU temperature without blocking the compositor.
+ * Query the NVIDIA GPU without blocking the compositor. Temperature and fan
+ * duty come back from one invocation, since the subprocess is the expensive
+ * part and both are wanted on the same tick.
  *
- * @returns {Promise<number|null>} degrees Celsius
+ * @returns {Promise<{temperature: number|null, fan: number|null}>} readings
  */
 export function readGpuAsync() {
+    const empty = {temperature: null, fan: null};
+
     return new Promise(resolve => {
         let proc;
         try {
             proc = Gio.Subprocess.new(
-                ['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader,nounits'],
+                ['nvidia-smi', '--query-gpu=temperature.gpu,fan.speed',
+                    '--format=csv,noheader,nounits'],
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
         } catch {
-            resolve(null);
+            resolve(empty);
             return;
         }
 
@@ -348,13 +423,19 @@ export function readGpuAsync() {
             try {
                 const [, stdout] = source.communicate_utf8_finish(result);
                 if (!source.get_successful()) {
-                    resolve(null);
+                    resolve(empty);
                     return;
                 }
-                const value = Number(String(stdout).trim().split('\n')[0]);
-                resolve(Number.isFinite(value) ? value : null);
+                /* Cards without a controllable fan print "[N/A]", which is not
+                 * a number and so falls through to null. */
+                const fields = String(stdout).trim().split('\n')[0].split(',')
+                    .map(field => Number(field.trim()));
+                resolve({
+                    temperature: Number.isFinite(fields[0]) ? fields[0] : null,
+                    fan: Number.isFinite(fields[1]) ? fields[1] : null,
+                });
             } catch {
-                resolve(null);
+                resolve(empty);
             }
         });
     });
@@ -393,6 +474,7 @@ export function qualifiedName(sensor) {
  * @returns {string|null} sensor id
  */
 export function defaultCpuSensorId(sensors) {
+    const temperatures = sensors.filter(s => s.family === FAMILY_TEMPERATURE);
     const preferences = [
         s => s.chip === 'k10temp' && s.label.startsWith('Package'),
         s => s.chip === 'coretemp' && /Package/i.test(s.label),
@@ -404,9 +486,11 @@ export function defaultCpuSensorId(sensors) {
     ];
 
     for (const match of preferences) {
-        const found = sensors.find(match);
+        const found = temperatures.find(match);
         if (found)
             return found.id;
     }
+    if (temperatures.length)
+        return temperatures[0].id;
     return sensors.length ? sensors[0].id : null;
 }

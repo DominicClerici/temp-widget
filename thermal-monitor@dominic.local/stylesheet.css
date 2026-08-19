@@ -38,7 +38,9 @@
     font-feature-settings: "tnum";
     font-weight: 500;
     text-align: right;
-    min-width: 60px;
+    /* Wide enough for "3045 RPM" so the column does not shift as fans spin
+     * up and down. */
+    min-width: 78px;
 }
 
 .thermal-menu-empty {

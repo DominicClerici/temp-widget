@@ -4,15 +4,13 @@ import Cairo from 'gi://cairo';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
 
-/* The y-axis never squeezes tighter than this, so a sensor idling at a steady
- * temperature shows a flat line rather than amplified sub-degree noise. */
-const MIN_SPAN_CELSIUS = 8;
-const AXIS_PADDING_CELSIUS = 2;
+import {axisFor} from './format.js';
+import {METRIC_TEMPERATURE} from './sensors.js';
 
 export const Chart = GObject.registerClass(
 class Chart extends St.DrawingArea {
     constructor(params = {}) {
-        const {color = [0.35, 0.68, 0.98], ...rest} = params;
+        const {color = [0.35, 0.68, 0.98], metric = METRIC_TEMPERATURE, ...rest} = params;
         super({
             style_class: 'thermal-chart',
             x_expand: true,
@@ -20,6 +18,7 @@ class Chart extends St.DrawingArea {
         });
 
         this._color = color;
+        this._axis = axisFor(metric);
         this._ring = null;
         this._warn = null;
         this._crit = null;
@@ -44,6 +43,16 @@ class Chart extends St.DrawingArea {
     }
 
     /**
+     * Switch the y-axis to the conventions of another unit.
+     *
+     * @param {string} metric one of the METRIC_* constants
+     */
+    setMetric(metric) {
+        this._axis = axisFor(metric);
+        this.queue_repaint();
+    }
+
+    /**
      * Draw horizontal threshold guides at these temperatures.
      *
      * @param {number|null} warn warning threshold in Celsius
@@ -55,24 +64,29 @@ class Chart extends St.DrawingArea {
         this.queue_repaint();
     }
 
-    /* Fit the axis to the data, widened to MIN_SPAN_CELSIUS and rounded to
-     * whole degrees so the baseline stops jittering between frames. */
+    /* Fit the axis to the data, widened to the metric's minimum span and
+     * rounded to its step so the baseline stops jittering between frames. */
     _axisRange(extent) {
+        const {minSpan, padding, step, floor, ceiling} = this._axis;
         let {min, max} = extent;
-        min -= AXIS_PADDING_CELSIUS;
-        max += AXIS_PADDING_CELSIUS;
+        min -= padding;
+        max += padding;
 
         const span = max - min;
-        if (span < MIN_SPAN_CELSIUS) {
-            const grow = (MIN_SPAN_CELSIUS - span) / 2;
+        if (span < minSpan) {
+            const grow = (minSpan - span) / 2;
             min -= grow;
             max += grow;
         }
 
-        min = Math.floor(min);
-        max = Math.ceil(max);
-        if (max - min < 1)
-            max = min + 1;
+        min = Math.floor(min / step) * step;
+        max = Math.ceil(max / step) * step;
+        if (floor !== null && min < floor)
+            min = floor;
+        if (ceiling !== null && max > ceiling)
+            max = ceiling;
+        if (max - min < step)
+            max = min + step;
         return {min, max};
     }
 

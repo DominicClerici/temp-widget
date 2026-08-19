@@ -1,5 +1,12 @@
 /* Shared presentation helpers. No shell imports, so prefs.js can use them too. */
 
+import {
+    FAMILY_TEMPERATURE,
+    METRIC_TEMPERATURE,
+    METRIC_RPM,
+    METRIC_PERCENT,
+} from './sensors.js';
+
 export const LEVEL_NORMAL = 'normal';
 export const LEVEL_WARN = 'warn';
 export const LEVEL_CRIT = 'crit';
@@ -42,22 +49,75 @@ export function formatTemp(celsius, {unit = 'celsius', decimals = 0, suffix = tr
     return suffix ? `${value}${unitSuffix(unit)}` : value;
 }
 
+/* Tachometers and duty cycles are whole numbers by nature, so the decimals
+ * preference — which exists to expose sub-degree detail — does not apply. */
+function formatWhole(value, unit, {suffix = true} = {}) {
+    if (value === null || value === undefined || !Number.isFinite(value))
+        return suffix ? `--${unit}` : '--';
+    const rounded = String(Math.round(value));
+    return suffix ? `${rounded}${unit}` : rounded;
+}
+
 /**
- * Classify a reading against the configured thresholds.
+ * Render any sensor reading in the unit its metric names.
  *
- * @param {number|null} celsius temperature in degrees Celsius
+ * @param {number|null} value reading in the sensor's own unit
+ * @param {string} metric one of the METRIC_* constants
+ * @param {object} [opts] formatting options, as for formatTemp
+ * @returns {string} formatted reading
+ */
+export function formatReading(value, metric, opts = {}) {
+    switch (metric) {
+    case METRIC_RPM:
+        return formatWhole(value, ' RPM', opts);
+    case METRIC_PERCENT:
+        return formatWhole(value, '%', opts);
+    case METRIC_TEMPERATURE:
+    default:
+        return formatTemp(value, opts);
+    }
+}
+
+/**
+ * Classify a reading against the configured thresholds. Only temperatures have
+ * thresholds; anything else is always normal.
+ *
+ * @param {number|null} value reading in the sensor's own unit
+ * @param {string} family one of the FAMILY_* constants
  * @param {number} warn warning threshold in Celsius
  * @param {number} crit critical threshold in Celsius
  * @returns {string} one of the LEVEL_* constants
  */
-export function levelFor(celsius, warn, crit) {
-    if (celsius === null || !Number.isFinite(celsius))
+export function levelFor(value, family, warn, crit) {
+    if (family !== FAMILY_TEMPERATURE)
         return LEVEL_NORMAL;
-    if (celsius >= crit)
+    if (value === null || !Number.isFinite(value))
+        return LEVEL_NORMAL;
+    if (value >= crit)
         return LEVEL_CRIT;
-    if (celsius >= warn)
+    if (value >= warn)
         return LEVEL_WARN;
     return LEVEL_NORMAL;
+}
+
+/* Chart axis behaviour per metric. `minSpan` keeps a steady reading flat rather
+ * than amplifying noise, `step` is the rounding granularity that stops the
+ * baseline jittering, and floor/ceiling clamp to the range the unit can
+ * physically take. */
+const AXES = {
+    [METRIC_TEMPERATURE]: {minSpan: 8, padding: 2, step: 1, floor: null, ceiling: null},
+    [METRIC_RPM]: {minSpan: 300, padding: 50, step: 50, floor: 0, ceiling: null},
+    [METRIC_PERCENT]: {minSpan: 20, padding: 5, step: 5, floor: 0, ceiling: 100},
+};
+
+/**
+ * Axis parameters for a metric.
+ *
+ * @param {string} metric one of the METRIC_* constants
+ * @returns {object} axis parameters
+ */
+export function axisFor(metric) {
+    return AXES[metric] ?? AXES[METRIC_TEMPERATURE];
 }
 
 /* Chart series colours. Chosen to stay distinguishable against the dark widget
